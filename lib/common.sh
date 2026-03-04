@@ -36,11 +36,13 @@ log_warning() {
 }
 
 begin_section() {
-  log "\n=== BEGIN: $1 ==="
+  echo "" | tee -a "$LOG_FILE"
+  log "=== BEGIN: $1 ==="
 }
 
 end_section() {
-  log "=== END: $1 ===\n"
+  log "=== END: $1 ==="
+  echo "" | tee -a "$LOG_FILE"
 }
 
 die() {
