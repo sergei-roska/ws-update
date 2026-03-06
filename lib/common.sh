@@ -54,10 +54,50 @@ die() {
 }
 
 # === Sudo Helpers ===
+setup_sudo_askpass() {
+  if [[ -n "${SUDO_ASKPASS:-}" ]]; then
+    return 0
+  fi
+
+  log "Setting up secure SUDO_ASKPASS for the session..."
+
+  # Create a restricted temporary directory
+  local auth_dir
+  auth_dir=$(mktemp -d /tmp/ws-update-auth-XXXXXX)
+  chmod 700 "$auth_dir"
+  export WS_SUDO_AUTH_DIR="$auth_dir"
+
+  local pass_file="$auth_dir/.sp"
+  local askpass_script="$auth_dir/askpass.sh"
+
+  # Prompt for password once and store it
+  stty -echo
+  printf "Enter sudo password for %s (stored securely for this session): " "${USER:-$(whoami)}"
+  read -r password
+  stty echo
+  printf "\n"
+
+  echo "$password" > "$pass_file"
+  chmod 600 "$pass_file"
+
+  # Create the askpass script
+  cat <<EOF > "$askpass_script"
+#!/usr/bin/env bash
+cat "$pass_file"
+EOF
+  chmod 700 "$askpass_script"
+
+  export SUDO_ASKPASS="$askpass_script"
+  # Pre-verify sudo access
+  if ! sudo -A -v; then
+    rm -rf "$auth_dir"
+    die "Invalid sudo password provided"
+  fi
+}
+
 require_sudo() {
   if ! sudo -n true 2>/dev/null; then
-    log_error "This script requires sudo privileges"
-    sudo -v || die "Failed to obtain sudo privileges"
+    setup_sudo_askpass
   fi
 }
 
@@ -69,7 +109,11 @@ start_sudo_keepalive() {
     # The default sudo timeout is 5-15 min; 50s keeps it well within range.
     (
       while true; do
-        sudo -n -v 2>/dev/null || true
+        if [[ -n "${SUDO_ASKPASS:-}" ]]; then
+          sudo -A -v 2>/dev/null || true
+        else
+          sudo -n -v 2>/dev/null || true
+        fi
         sleep 50
       done
     ) &
@@ -92,29 +136,34 @@ check_internet() {
   curl -sf --max-time 5 --head https://connectivity-check.ubuntu.com/ >/dev/null 2>&1
 }
 
-# === Error Handling ===
+# === Cleanup and Error Handling ===
 _ws_update_cleanup() {
   local exit_code=$?
   stop_sudo_keepalive
-  echo
-  log_error "==========================================="
-  log_error "Script execution failed with exit code: $exit_code"
-  log_error "==========================================="
-  log_error "Check the log file: $LOG_FILE"
-  log_error "==========================================="
+  
+  if [[ -n "${WS_SUDO_AUTH_DIR:-}" && -d "$WS_SUDO_AUTH_DIR" ]]; then
+    rm -rf "$WS_SUDO_AUTH_DIR"
+  fi
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo
+    log_error "==========================================="
+    log_error "Script execution failed with exit code: $exit_code"
+    log_error "==========================================="
+    log_error "Check the log file: $LOG_FILE"
+    log_error "==========================================="
+  fi
   exit "$exit_code"
 }
 
 _ws_update_interrupt_handler() {
-  stop_sudo_keepalive
   echo
   log "Script interrupted by user (Ctrl+C)"
-  log "Script terminated. Log file: $LOG_FILE"
   exit 130
 }
 
 setup_error_handling() {
-  trap _ws_update_cleanup ERR
+  trap _ws_update_cleanup EXIT
   trap _ws_update_interrupt_handler INT TERM
 }
 
