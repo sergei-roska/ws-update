@@ -91,7 +91,26 @@ stop_sudo_keepalive() {
 
 # === Pre-flight Checks ===
 check_internet() {
-  curl -sf --max-time 5 --head https://connectivity-check.ubuntu.com/ >/dev/null 2>&1
+  local endpoints=(
+    "https://connectivity-check.ubuntu.com/"
+    "https://nmcheck.gnome.org/check_network_status.txt"
+    "https://www.google.com/generate_204"
+  )
+  local endpoint
+
+  for endpoint in "${endpoints[@]}"; do
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fsS --max-time 5 --output /dev/null "$endpoint" >/dev/null 2>&1; then
+        return 0
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if wget -q --timeout=5 --tries=1 --spider "$endpoint" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+  done
+
+  return 1
 }
 
 # === Cleanup and Error Handling ===
